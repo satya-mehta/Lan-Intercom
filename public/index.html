@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Video Intercom</title>
+  <!-- FontAwesome for Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  
+  <style>
+    :root {
+      --bg-color: #121212;
+      --surface-color: #1e1e1e;
+      --primary-color: #0bdcb6;
+      --danger-color: #ff4757;
+      --text-color: #ffffff;
+      --glass-bg: rgba(30, 30, 30, 0.85);
+    }
+
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+    body {
+      font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--bg-color);
+      color: var(--text-color);
+      margin: 0; padding: 0;
+      height: 100dvh; /* Dynamic viewport height */
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* --- VIDEO GRID --- */
+    #video-grid {
+      flex: 1;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 12px;
+      padding: 12px;
+      width: 100%;
+      overflow-y: auto;
+      align-content: center;
+    }
+
+    .video-card {
+      position: relative;
+      background: #000;
+      border-radius: 12px;
+      overflow: hidden;
+      aspect-ratio: 16/9;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+      animation: fadeIn 0.3s ease;
+    }
+    
+    @keyframes fadeIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); }}
+
+    @media (max-width: 600px) {
+      .video-card { aspect-ratio: 4/3; }
+      #video-grid { padding: 8px; gap: 8px; }
+    }
+
+    .video-card video { width: 100%; height: 100%; object-fit: cover; }
+    
+    .user-label {
+      position: absolute; bottom: 8px; left: 8px;
+      background: rgba(0,0,0,0.6); padding: 4px 8px;
+      border-radius: 4px; font-size: 12px; backdrop-filter: blur(2px);
+    }
+
+    /* --- LOCAL VIDEO (Floating) --- */
+    #localVideoContainer {
+      position: absolute; bottom: 100px; right: 20px;
+      width: 110px; aspect-ratio: 9/16;
+      background: #333; border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 8px 16px rgba(0,0,0,0.5);
+      border: 2px solid rgba(255,255,255,0.2);
+      z-index: 100;
+      touch-action: none; cursor: grab;
+    }
+    #localVideo { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+
+    /* --- CONTROLS --- */
+    #controls-bar {
+      height: 80px;
+      background: var(--glass-bg);
+      backdrop-filter: blur(10px);
+      display: flex; align-items: center; justify-content: center; gap: 20px;
+      padding-bottom: env(safe-area-inset-bottom);
+      z-index: 200;
+      border-top: 1px solid rgba(255,255,255,0.1);
+    }
+
+    .control-btn {
+      width: 50px; height: 50px; border-radius: 50%; border: none;
+      background: rgba(255,255,255,0.15); color: white; font-size: 20px;
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+      transition: all 0.2s;
+    }
+    .control-btn:active { transform: scale(0.95); }
+    .control-btn.active { background-color: var(--primary-color); color: #000; }
+    .control-btn.off { background-color: var(--danger-color); }
+    
+    #endCallButton { background-color: var(--danger-color); display: none; }
+
+    /* --- USER LIST DRAWER --- */
+    #userListContainer {
+        position: absolute; top: 20px; left: 20px;
+        z-index: 150; pointer-events: none; /* Let clicks pass through when closed */
+    }
+    
+    #toggleUsersBtn {
+        pointer-events: auto;
+        background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2);
+        color: white; padding: 8px 12px; border-radius: 20px;
+        cursor: pointer; font-size: 14px; backdrop-filter: blur(5px);
+        display: flex; align-items: center; gap: 8px;
+    }
+
+    #userListWrapper {
+        margin-top: 10px;
+        background: var(--glass-bg);
+        border-radius: 12px;
+        padding: 10px;
+        width: 220px;
+        backdrop-filter: blur(10px);
+        display: none; /* Hidden by default */
+        pointer-events: auto;
+        border: 1px solid rgba(255,255,255,0.1);
+    }
+    #userListWrapper.open { display: block; }
+
+    #userList { list-style: none; padding: 0; margin: 0; max-height: 300px; overflow-y: auto; }
+    #userList li {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 8px; border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+    #userList li:last-child { border-bottom: none; }
+    
+    .call-btn-small {
+        background: var(--primary-color); color: #000;
+        border: none; padding: 4px 10px; border-radius: 4px;
+        font-weight: bold; cursor: pointer; font-size: 12px;
+    }
+
+    /* --- POPUP --- */
+    #incomingCallPopup {
+      display: none;
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(0,0,0,0.85); z-index: 2000;
+      align-items: center; justify-content: center;
+      backdrop-filter: blur(5px);
+    }
+    .popup-content {
+      background: var(--surface-color); padding: 30px; border-radius: 20px;
+      text-align: center; width: 90%; max-width: 320px;
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    .popup-btns { display: flex; gap: 15px; justify-content: center; margin-top: 20px; }
+    .btn-popup {
+      padding: 12px 24px; border-radius: 30px; border: none;
+      font-weight: bold; font-size: 16px; cursor: pointer; color: white;
+    }
+    #acceptButton { background: #2ed573; }
+    #rejectButton { background: #ff4757; }
+
+  </style>
+</head>
+<body>
+
+  <!-- User List Drawer -->
+  <div id="userListContainer">
+      <button id="toggleUsersBtn"><i class="fa-solid fa-users"></i> Users</button>
+      <div id="userListWrapper">
+          <ul id="userList">
+              <!-- JS Populates this -->
+          </ul>
+          <div id="noUsersMsg" style="padding:10px; text-align:center; color:#777; font-size:12px; display:none;">No other users online</div>
+      </div>
+  </div>
+
+  <!-- Main Video Grid -->
+  <div id="video-grid">
+     <!-- Remote videos injected here -->
+  </div>
+
+  <!-- Local Video -->
+  <div id="localVideoContainer">
+    <video id="localVideo" autoplay muted playsinline></video>
+  </div>
+
+  <!-- Incoming Call Popup -->
+  <div id="incomingCallPopup">
+    <div class="popup-content">
+      <div style="font-size: 40px; margin-bottom: 15px; color: var(--primary-color);">
+        <i class="fa-solid fa-phone-volume"></i>
+      </div>
+      <h3 style="margin: 0 0 10px 0;">Incoming Call</h3>
+      <p id="popupCallerId" style="color:#ccc; margin: 0 0 20px 0;">Unknown Caller</p>
+      <div class="popup-btns">
+        <button id="rejectButton" class="btn-popup"><i class="fa-solid fa-xmark"></i> Reject</button>
+        <button id="acceptButton" class="btn-popup"><i class="fa-solid fa-check"></i> Accept</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Controls -->
+  <div id="controls-bar">
+    <button class="control-btn" id="btn-mic">
+      <i class="fa-solid fa-microphone"></i>
+    </button>
+    <button class="control-btn" id="btn-camera">
+      <i class="fa-solid fa-video"></i>
+    </button>
+    <button class="control-btn" id="endCallButton">
+      <i class="fa-solid fa-phone-slash"></i>
+    </button>
+  </div>
+
+  <!-- Socket.io -->
+  <script src="/socket.io/socket.io.js"></script>
+  <!-- Axios -->
+  <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+  <!-- Main Logic -->
+  <script src="scripts/main.js"></script>
+
+  <script>
+      // UI Only: Toggle User List
+      const toggleBtn = document.getElementById('toggleUsersBtn');
+      const listWrapper = document.getElementById('userListWrapper');
+      toggleBtn.addEventListener('click', () => {
+          listWrapper.classList.toggle('open');
+      });
+  </script>
+</body>
+</html>

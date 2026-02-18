@@ -24,7 +24,7 @@
       background-color: var(--bg-color);
       color: var(--text-color);
       margin: 0; padding: 0;
-      height: 100dvh; /* Dynamic viewport height */
+      height: 100dvh;
       overflow: hidden;
       display: flex;
       flex-direction: column;
@@ -40,6 +40,15 @@
       width: 100%;
       overflow-y: auto;
       align-content: center;
+    }
+
+    /* Message when grid is empty */
+    #empty-grid-msg {
+      display: none;
+      width: 100%;
+      text-align: center;
+      color: #555;
+      font-size: 1.2rem;
     }
 
     .video-card {
@@ -65,6 +74,7 @@
       position: absolute; bottom: 8px; left: 8px;
       background: rgba(0,0,0,0.6); padding: 4px 8px;
       border-radius: 4px; font-size: 12px; backdrop-filter: blur(2px);
+      z-index: 10;
     }
 
     /* --- LOCAL VIDEO (Floating) --- */
@@ -106,7 +116,7 @@
     /* --- USER LIST DRAWER --- */
     #userListContainer {
         position: absolute; top: 20px; left: 20px;
-        z-index: 150; pointer-events: none; /* Let clicks pass through when closed */
+        z-index: 150; pointer-events: none;
     }
     
     #toggleUsersBtn {
@@ -122,9 +132,9 @@
         background: var(--glass-bg);
         border-radius: 12px;
         padding: 10px;
-        width: 220px;
+        width: 240px;
         backdrop-filter: blur(10px);
-        display: none; /* Hidden by default */
+        display: none;
         pointer-events: auto;
         border: 1px solid rgba(255,255,255,0.1);
     }
@@ -139,7 +149,7 @@
     
     .call-btn-small {
         background: var(--primary-color); color: #000;
-        border: none; padding: 4px 10px; border-radius: 4px;
+        border: none; padding: 6px 12px; border-radius: 6px;
         font-weight: bold; cursor: pointer; font-size: 12px;
     }
 
@@ -172,16 +182,16 @@
   <div id="userListContainer">
       <button id="toggleUsersBtn"><i class="fa-solid fa-users"></i> Users</button>
       <div id="userListWrapper">
-          <ul id="userList">
-              <!-- JS Populates this -->
-          </ul>
+          <ul id="userList"></ul>
           <div id="noUsersMsg" style="padding:10px; text-align:center; color:#777; font-size:12px; display:none;">No other users online</div>
       </div>
   </div>
 
   <!-- Main Video Grid -->
   <div id="video-grid">
-     <!-- Remote videos injected here -->
+     <div id="empty-grid-msg">
+        <i class="fa-solid fa-video-slash" style="font-size: 48px; opacity: 0.3;"></i>
+     </div>
   </div>
 
   <!-- Local Video -->
@@ -195,11 +205,11 @@
       <div style="font-size: 40px; margin-bottom: 15px; color: var(--primary-color);">
         <i class="fa-solid fa-phone-volume"></i>
       </div>
-      <h3 style="margin: 0 0 10px 0;">Incoming Call</h3>
-      <p id="popupCallerId" style="color:#ccc; margin: 0 0 20px 0;">Unknown Caller</p>
+      <h3 style="margin: 0 0 10px 0;">Incoming Invite</h3>
+      <p id="popupCallerId" style="color:#ccc; margin: 0 0 20px 0;">Unknown</p>
       <div class="popup-btns">
         <button id="rejectButton" class="btn-popup"><i class="fa-solid fa-xmark"></i> Reject</button>
-        <button id="acceptButton" class="btn-popup"><i class="fa-solid fa-check"></i> Accept</button>
+        <button id="acceptButton" class="btn-popup"><i class="fa-solid fa-check"></i> Join</button>
       </div>
     </div>
   </div>
@@ -217,15 +227,14 @@
     </button>
   </div>
 
-  <!-- Socket.io -->
+  <!-- Dependencies -->
   <script src="/socket.io/socket.io.js"></script>
-  <!-- Axios -->
   <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
   <!-- Main Logic -->
   <script src="scripts/main.js"></script>
 
   <script>
-      // UI Only: Toggle User List
+      // Simple UI Toggles
       const toggleBtn = document.getElementById('toggleUsersBtn');
       const listWrapper = document.getElementById('userListWrapper');
       toggleBtn.addEventListener('click', () => {

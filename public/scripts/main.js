@@ -1,7 +1,7 @@
 const socket = io();
-const peerConnections = {};
+const peerConnections = {}; // Map<socketId, RTCPeerConnection>
 let localStream;
-const pcadip = ''; // Configuration for IP if needed
+let currentSessionId = null;
 
 // DOM Elements
 const localVideo = document.getElementById('localVideo');
@@ -9,8 +9,9 @@ const videoGrid = document.getElementById('video-grid');
 const endCallBtn = document.getElementById('endCallButton');
 const btnMic = document.getElementById('btn-mic');
 const btnCam = document.getElementById('btn-camera');
+const emptyGridMsg = document.getElementById('empty-grid-msg');
 
-// --- Cookie Helpers ---
+// --- Helper: Cookies ---
 function setCookie(name, value, days) {
   const date = new Date();
   date.setTime(date.getTime() + days * 24 * 60 * 60 * 1000);
@@ -22,260 +23,316 @@ function getCookie(name) {
   return match ? match[2] : null;
 }
 
-// --- Initialization ---
+// --- 1. Initialization ---
 let userName = getCookie('userName');
 if (!userName) {
   userName = prompt('Enter your name:');
   if (userName) setCookie('userName', userName, 365);
 }
 
-if (userName) {
-  socket.emit('register-device', { name: userName });
-}
+// Triggered on connection
+socket.on('connect', () => {
+    console.log("Connected to server");
+    if (userName) {
+        socket.emit('register-device', { name: userName });
+    }
+});
 
-// --- Media Access ---
-function startLocalStream() {
-    navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 15, max: 30 } },
-        audio: { echoCancellation: true, noiseSuppression: true, sampleRate: 44100 },
-    })
-    .then((stream) => {
+// --- 2. Media Access ---
+async function startLocalStream() {
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 15, max: 30 } },
+            audio: { echoCancellation: true, noiseSuppression: true, sampleRate: 44100 },
+        });
         localStream = stream;
         localVideo.srcObject = stream;
-        
-        // Setup toggle buttons state
         updateMediaControlUI();
-
-        // Notify server
-        socket.emit('new-user', { id: socket.id });
-
-        // Socket Listeners for WebRTC
-        setupSocketListeners();
-    })
-    .catch((error) => {
+    } catch (error) {
         console.error('Error accessing media devices:', error);
         alert("Camera/Microphone access denied.");
-    });
+    }
 }
 
-// Call immediately on load
+// Start media immediately
 startLocalStream();
 
-// --- Socket Events ---
-function setupSocketListeners() {
-    socket.on('offer', ({ offer, senderId }) => handleOffer(offer, senderId));
-    socket.on('answer', ({ answer, senderId }) => handleAnswer(answer, senderId));
-    socket.on('candidate', ({ candidate, senderId }) => handleCandidate(candidate, senderId));
-    
-    socket.on('participant-disconnected', ({ socketId }) => {
-        console.log(`Participant disconnected: ${socketId}`);
-        closeConnection(socketId);
-    });
-}
+// --- 3. Socket Events (Signaling) ---
 
-// Handle user list updates
+// A. User List
 socket.on('user-list', (users) => {
-  const userList = document.getElementById('userList');
-  const noUsersMsg = document.getElementById('noUsersMsg');
-  userList.innerHTML = ''; 
+    const userList = document.getElementById('userList');
+    const noUsersMsg = document.getElementById('noUsersMsg');
+    userList.innerHTML = ''; 
 
-  const others = users.filter(user => user.id !== socket.id);
-  
-  if(others.length === 0) {
-      noUsersMsg.style.display = 'block';
-  } else {
-      noUsersMsg.style.display = 'none';
-      others.forEach((user) => {
-        const listItem = document.createElement('li');
-        listItem.innerHTML = `
-            <span><i class="fa-regular fa-user"></i> ${user.name}</span>
-        `;
-        const callButton = document.createElement('button');
-        callButton.className = 'call-btn-small';
-        callButton.textContent = 'Call';
-        callButton.onclick = () => initiateCall(user.id);
-        
-        listItem.appendChild(callButton);
-        userList.appendChild(listItem);
-      });
-  }
+    const others = users.filter(user => user.id !== socket.id);
+    
+    if(others.length === 0) {
+        noUsersMsg.style.display = 'block';
+    } else {
+        noUsersMsg.style.display = 'none';
+        others.forEach((user) => {
+            const listItem = document.createElement('li');
+            listItem.innerHTML = `<span><i class="fa-regular fa-user"></i> ${user.name}</span>`;
+            
+            const callButton = document.createElement('button');
+            callButton.className = 'call-btn-small';
+            callButton.textContent = 'Call';
+            callButton.onclick = () => startSessionAndInvite(user.id);
+            
+            listItem.appendChild(callButton);
+            userList.appendChild(listItem);
+        });
+    }
 });
 
-// Handle incoming call popup
-socket.on('incoming-call', ({ from, name }) => {
-  const popup = document.getElementById('incomingCallPopup');
-  const popupCallerId = document.getElementById('popupCallerId');
-  const acceptButton = document.getElementById('acceptButton');
-  const rejectButton = document.getElementById('rejectButton');
+// B. Invitations
+socket.on('session-invite', ({ from, sessionId }) => {
+    if (currentSessionId) return; // Already in a call
 
-  // Trigger external device vibration/signal
-  axios.get('http://192.168.82.196/incomingCall')
-    .then(response => console.log('Signal sent for pcad', response.data))
-    .catch(error => console.error('Error sending vibration request:', error));
+    // Trigger external device vibration/signal
+    axios.get('http://192.168.82.196/incomingCall')
+        .then(response => console.log('Signal sent', response.data))
+        .catch(e => console.error('Signal error', e));
 
-  popup.style.display = 'flex';
-  popupCallerId.textContent = `${name}`;
-
-  acceptButton.onclick = () => acceptCall(from);
-  rejectButton.onclick = () => rejectCall(from);
+    showIncomingCallPopup(from, sessionId);
 });
 
-// --- Call Logic ---
+socket.on('invite-rejected', ({ userId }) => {
+    alert(`User refused the invitation.`);
+    // We stay in the room alone
+});
 
-function initiateCall(targetId) {
-  socket.emit('call-initiate', { targetId });
-  endCallBtn.style.display = 'flex'; // Show end call button
+// C. Negotiation Trigger (Server Controlled)
+socket.on('create-offer', async ({ targetId }) => {
+    console.log("Server requested to create offer for:", targetId);
+    await createPeerConnection(targetId, true); // true = we are making offer
+});
+
+// D. WebRTC Signals
+socket.on('offer', async ({ senderId, offer }) => {
+    console.log("Received offer from:", senderId);
+    await createPeerConnection(senderId, false); // Create peer before setting remote desc
+    await handleOffer(senderId, offer);
+});
+
+socket.on('answer', async ({ senderId, answer }) => {
+    console.log("Received answer from:", senderId);
+    await handleAnswer(senderId, answer);
+});
+
+socket.on('candidate', async ({ senderId, candidate }) => {
+    await handleCandidate(senderId, candidate);
+});
+
+// E. Disconnections (THIS ANSWERS YOUR QUESTION)
+socket.on('participant-left', ({ userId }) => {
+    console.log(`User ${userId} left the session.`);
+    cleanupPeer(userId);
+});
+
+socket.on('force-peer-close', ({ userId }) => {
+    console.log(`Force closing peer: ${userId}`);
+    cleanupPeer(userId);
+});
+
+
+// --- 4. Call Logic (Actions) ---
+
+function startSessionAndInvite(targetId) {
+    if (currentSessionId) return; 
+    
+    const newSessionId = `room-${Date.now()}-${Math.floor(Math.random()*1000)}`;
+    currentSessionId = newSessionId;
+    
+    socket.emit('join-session', { sessionId: newSessionId });
+    socket.emit('invite-to-session', { targetId: targetId, sessionId: newSessionId });
+    
+    endCallBtn.style.display = 'flex';
+    emptyGridMsg.style.display = 'block'; // Show "Waiting" icon
+    emptyGridMsg.innerHTML = '<i class="fa-solid fa-spinner fa-spin" style="font-size: 48px; margin-bottom:10px;"></i><p>Calling...</p>';
 }
 
-function acceptCall(callerId) {
-  document.getElementById('incomingCallPopup').style.display = 'none';
-  socket.emit('call-accept', { from: callerId });
-  endCallBtn.style.display = 'flex';
-  createPeerConnection(callerId);
+function showIncomingCallPopup(callerId, sessionId) {
+    const popup = document.getElementById('incomingCallPopup');
+    const popupCallerId = document.getElementById('popupCallerId');
+    const acceptButton = document.getElementById('acceptButton');
+    const rejectButton = document.getElementById('rejectButton');
+
+    popup.style.display = 'flex';
+    popupCallerId.textContent = `User ID: ${callerId.substr(0,5)}...`;
+
+    rejectButton.onclick = () => {
+        popup.style.display = 'none';
+        socket.emit('reject-invite', { targetId: callerId });
+    };
+
+    acceptButton.onclick = () => {
+        popup.style.display = 'none';
+        currentSessionId = sessionId;
+        socket.emit('join-session', { sessionId: sessionId });
+        endCallBtn.style.display = 'flex';
+        emptyGridMsg.style.display = 'block';
+        emptyGridMsg.innerHTML = '<i class="fa-solid fa-spinner fa-spin" style="font-size: 48px;"></i><p>Connecting...</p>';
+    };
 }
 
-function rejectCall(callerId) {
-  document.getElementById('incomingCallPopup').style.display = 'none';
-  socket.emit('call-reject', { from: callerId });
+function leaveSession() {
+    if (currentSessionId) {
+        socket.emit('leave-session', { sessionId: currentSessionId });
+        currentSessionId = null;
+    }
+    
+    // Close all connections
+    Object.keys(peerConnections).forEach(id => cleanupPeer(id));
+    
+    endCallBtn.style.display = 'none';
+    emptyGridMsg.style.display = 'none'; // Hide the waiting message
 }
 
-// --- WebRTC Core ---
+endCallBtn.addEventListener('click', leaveSession);
 
-function createPeerConnection(socketId) {
-  const peerConnection = setupPeerConnection(socketId);
-  peerConnections[socketId] = peerConnection;
 
-  peerConnection
-    .createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true })
-    .then((offer) => peerConnection.setLocalDescription(offer))
-    .then(() => socket.emit('offer', { offer: peerConnection.localDescription, receiverId: socketId }))
-    .catch((error) => console.error('Error creating peer connection:', error));
-}
+// --- 5. WebRTC Core ---
 
-function setupPeerConnection(socketId) {
-  const peerConnection = new RTCPeerConnection({
+const iceServers = {
     iceServers: [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' },
-    ],
-  });
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+    ]
+};
 
-  if(localStream) {
-      localStream.getTracks().forEach((track) => peerConnection.addTrack(track, localStream));
-  }
+async function createPeerConnection(targetId, isOfferer) {
+    if (peerConnections[targetId]) return peerConnections[targetId];
 
-  // --- CHANGED FOR GRID SUPPORT ---
-  peerConnection.ontrack = (event) => {
-    // Check if video element already exists for this user
-    let remoteVideoContainer = document.getElementById(`user-container-${socketId}`);
+    const pc = new RTCPeerConnection(iceServers);
+    peerConnections[targetId] = pc;
+
+    if (localStream) {
+        localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+    }
+
+    pc.ontrack = (event) => {
+        const stream = event.streams[0];
+        addRemoteVideo(targetId, stream);
+    };
+
+    pc.onicecandidate = (event) => {
+        if (event.candidate) {
+            socket.emit('candidate', { receiverId: targetId, candidate: event.candidate });
+        }
+    };
+
+    if (isOfferer) {
+        try {
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            socket.emit('offer', { receiverId: targetId, offer: pc.localDescription });
+        } catch (e) {
+            console.error("Error creating offer:", e);
+        }
+    }
+
+    return pc;
+}
+
+async function handleOffer(senderId, offer) {
+    const pc = peerConnections[senderId]; 
+    if(!pc) return; // Should be created by createPeerConnection before this is called
     
-    if (!remoteVideoContainer) {
-        remoteVideoContainer = document.createElement('div');
-        remoteVideoContainer.id = `user-container-${socketId}`;
-        remoteVideoContainer.className = 'video-card';
-        
-        const videoEl = document.createElement('video');
-        videoEl.autoplay = true;
-        videoEl.playsInline = true;
-        videoEl.id = `remote-video-${socketId}`;
-        
-        // Add label (optional, name requires mapping ID to name which might need extra logic)
-        const label = document.createElement('div');
-        label.className = 'user-label';
-        label.innerText = `User ${socketId.substr(0,4)}`; 
-        
-        remoteVideoContainer.appendChild(videoEl);
-        remoteVideoContainer.appendChild(label);
-        videoGrid.appendChild(remoteVideoContainer);
+    await pc.setRemoteDescription(new RTCSessionDescription(offer));
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    socket.emit('answer', { receiverId: senderId, answer: pc.localDescription });
+}
+
+async function handleAnswer(senderId, answer) {
+    const pc = peerConnections[senderId];
+    if (pc) {
+        await pc.setRemoteDescription(new RTCSessionDescription(answer));
     }
+}
+
+async function handleCandidate(senderId, candidate) {
+    const pc = peerConnections[senderId];
+    if (pc) {
+        try {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (e) {
+            console.error("Error adding ice candidate", e);
+        }
+    }
+}
+
+
+// --- 6. Grid & UI Logic ---
+
+function addRemoteVideo(userId, stream) {
+    // Hide the "Empty/Waiting" message because we found a friend
+    emptyGridMsg.style.display = 'none';
+
+    let card = document.getElementById(`user-container-${userId}`);
+    if (card) return;
+
+    card = document.createElement('div');
+    card.id = `user-container-${userId}`;
+    card.className = 'video-card';
     
-    const videoElement = remoteVideoContainer.querySelector('video');
-    videoElement.srcObject = event.streams[0];
-  };
+    const video = document.createElement('video');
+    video.autoplay = true;
+    video.playsInline = true;
+    video.srcObject = stream;
+    
+    const label = document.createElement('div');
+    label.className = 'user-label';
+    label.innerText = `User ${userId.substr(0,4)}`;
 
-  peerConnection.onicecandidate = (event) => {
-    if (event.candidate) {
-      socket.emit('candidate', { candidate: event.candidate, receiverId: socketId });
+    card.appendChild(video);
+    card.appendChild(label);
+    videoGrid.appendChild(card);
+}
+
+function cleanupPeer(userId) {
+    // 1. Close WebRTC
+    if (peerConnections[userId]) {
+        peerConnections[userId].close();
+        delete peerConnections[userId];
     }
-  };
 
-  return peerConnection;
-}
+    // 2. Remove Video UI
+    const card = document.getElementById(`user-container-${userId}`);
+    if (card) card.remove();
 
-function handleOffer(offer, senderId) {
-  const peerConnection = setupPeerConnection(senderId);
-  peerConnections[senderId] = peerConnection;
-
-  peerConnection
-    .setRemoteDescription(new RTCSessionDescription(offer))
-    .then(() => peerConnection.createAnswer())
-    .then((answer) => peerConnection.setLocalDescription(answer))
-    .then(() => socket.emit('answer', { answer: peerConnection.localDescription, receiverId: senderId }))
-    .catch((error) => console.error('Error handling offer:', error));
-}
-
-function handleAnswer(answer, senderId) {
-  if (peerConnections[senderId]) {
-      peerConnections[senderId].setRemoteDescription(new RTCSessionDescription(answer))
-        .catch((error) => console.error('Error setting remote description:', error));
-  }
-}
-
-function handleCandidate(candidate, senderId) {
-  if (peerConnections[senderId]) {
-      peerConnections[senderId].addIceCandidate(new RTCIceCandidate(candidate))
-        .catch((error) => console.error('Error adding ICE candidate:', error));
-  }
-}
-
-// --- Cleanup ---
-
-function closeConnection(socketId) {
-    if (peerConnections[socketId]) {
-        peerConnections[socketId].close();
-        delete peerConnections[socketId];
+    // 3. Check if anyone is left. If not, show "Waiting..." or handle end of call
+    const remainingVideos = document.querySelectorAll('.video-card');
+    if (remainingVideos.length === 0) {
+        // If we are still in a session, show waiting. 
+        if(currentSessionId) {
+             emptyGridMsg.style.display = 'block';
+             emptyGridMsg.innerHTML = '<i class="fa-solid fa-user-clock" style="font-size: 48px; opacity: 0.5;"></i><p>Waiting for others...</p>';
+        } else {
+             emptyGridMsg.style.display = 'none';
+        }
     }
-    // Remove from Grid
-    const element = document.getElementById(`user-container-${socketId}`);
-    if (element) element.remove();
 }
 
-endCallBtn.addEventListener('click', () => {
-  // Stop all local tracks
-  if(localStream) {
-      localStream.getTracks().forEach((track) => track.stop());
-  }
 
-  // Close all peer connections
-  Object.keys(peerConnections).forEach((id) => closeConnection(id));
-  
-  // Hide End Button
-  endCallBtn.style.display = 'none';
+// --- 7. Local Interactions ---
 
-  // Restart Local Stream (Ready for next call)
-  startLocalStream();
-});
-
-// --- UI Interactions (Drag & Toggles) ---
-
-// 1. Toggle Mic
 btnMic.addEventListener('click', () => {
     if (!localStream) return;
-    const audioTracks = localStream.getAudioTracks();
-    if (audioTracks.length > 0) {
-        const enabled = !audioTracks[0].enabled;
-        audioTracks[0].enabled = enabled;
+    const track = localStream.getAudioTracks()[0];
+    if (track) {
+        track.enabled = !track.enabled;
         updateMediaControlUI();
     }
 });
 
-// 2. Toggle Cam
 btnCam.addEventListener('click', () => {
     if (!localStream) return;
-    const videoTracks = localStream.getVideoTracks();
-    if (videoTracks.length > 0) {
-        const enabled = !videoTracks[0].enabled;
-        videoTracks[0].enabled = enabled;
+    const track = localStream.getVideoTracks()[0];
+    if (track) {
+        track.enabled = !track.enabled;
         updateMediaControlUI();
     }
 });
@@ -285,26 +342,13 @@ function updateMediaControlUI() {
     const audioEnabled = localStream.getAudioTracks()[0]?.enabled;
     const videoEnabled = localStream.getVideoTracks()[0]?.enabled;
 
-    // Mic UI
-    if (audioEnabled) {
-        btnMic.classList.remove('off');
-        btnMic.innerHTML = '<i class="fa-solid fa-microphone"></i>';
-    } else {
-        btnMic.classList.add('off');
-        btnMic.innerHTML = '<i class="fa-solid fa-microphone-slash"></i>';
-    }
-
-    // Cam UI
-    if (videoEnabled) {
-        btnCam.classList.remove('off');
-        btnCam.innerHTML = '<i class="fa-solid fa-video"></i>';
-    } else {
-        btnCam.classList.add('off');
-        btnCam.innerHTML = '<i class="fa-solid fa-video-slash"></i>';
-    }
+    btnMic.classList.toggle('off', !audioEnabled);
+    btnMic.innerHTML = audioEnabled ? '<i class="fa-solid fa-microphone"></i>' : '<i class="fa-solid fa-microphone-slash"></i>';
+    
+    btnCam.classList.toggle('off', !videoEnabled);
+    btnCam.innerHTML = videoEnabled ? '<i class="fa-solid fa-video"></i>' : '<i class="fa-solid fa-video-slash"></i>';
 }
 
-// 3. Robust Drag Logic (Touch + Mouse)
 const dragItem = document.getElementById('localVideoContainer');
 let active = false;
 let currentX, currentY, initialX, initialY;
@@ -325,9 +369,7 @@ function dragStart(e) {
     initialX = e.clientX - xOffset;
     initialY = e.clientY - yOffset;
   }
-  if (e.target === dragItem || dragItem.contains(e.target)) {
-    active = true;
-  }
+  if (e.target === dragItem || dragItem.contains(e.target)) active = true;
 }
 
 function dragEnd(e) {

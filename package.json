@@ -1,0 +1,17 @@
+{
+  "name": "intercom",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node server/signaling-server.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "keywords": [],
+  "description": "",
+  "dependencies": {
+    "axios": "^1.7.9",
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1"
+  }
+}

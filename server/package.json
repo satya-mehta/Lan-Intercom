@@ -1,0 +1,16 @@
+{
+  "name": "intercom-server",
+  "version": "1.0.0",
+  "main": "signaling-server.js",
+  "description": "Signaling server for Intercom video calling.",
+  "scripts": {
+    "start": "node signaling-server.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1"
+  }
+}

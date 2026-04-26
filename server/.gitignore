@@ -1,0 +1,17 @@
+# TLS certs for local development
+server.crt
+server.key
+
+# Local environment
+.env
+
+# Server dependencies
+node_modules/# TLS certs for local development
+server.crt
+server.key
+
+# Local environment
+.env
+
+# Server dependencies
+node_modules/
